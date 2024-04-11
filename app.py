@@ -10,133 +10,74 @@ from gradio_client import Client
 from bs4 import BeautifulSoup
 import requests
 
+import os
+import json
+import shutil
+import uuid
+from flask import Flask, request, jsonify
+from gradio_client import Client
 
 
 
-app = Flask(__name__)
+
+
+app = Flask(__name__, static_url_path='/images', static_folder='images')
+
 
 @app.route("/")
 def start():
     return "The MBSA Server is Running"
 
-# Function to generate a random filename
-def generate_random_filename():
-    letters = string.ascii_lowercase
-    random_string = ''.join(random.choice(letters) for i in range(10))  # Generate a random string of length 10
-    return f"{random_string}.wav"  # Add the file extension
+@app.route('/process_image', methods=['GET'])
+def process_image():
+  # Get image URL and prompt from query parameters
+  image_url = request.args.get('image_url', '')
+  prompt = request.args.get('prompt', '')
 
-# Function to save text to speech audio
-async def text_to_speech_edge(text, language_code, voice="en-US-JennyNeural", rate="default", volume="default", pitch="default"):
-    language_dict = {
-        "English-Jenny (Female)": "en-US-JennyNeural",  # Add more language codes and corresponding voices if needed
-    }
-    voice = language_dict.get(language_code, voice)
-    rate_value = rate if rate != "default" else "0%"  # Default rate value
-    volume_value = volume if volume != "default" else "0%"  # Default volume value
-    pitch_value = pitch if pitch != "default" else "0Hz"  # Default pitch value
+  # Make prediction using Gradio client
+  client = Client("https://tencentarc-t2i-adapter-sdxl.hf.space/")
+  result = client.predict(
+      image_url,
+      prompt,
+      "extra digit, fewer digits, cropped, worst quality, low quality, glitch, deformed, mutated, ugly, disfigured",
+      "canny",
+      "(No style)",
+      25,
+      7.5,
+      0.8,
+      1,
+      42,
+      True,
+      api_name="/run")
 
-    communicate = edge_tts.Communicate(
-        text,
-        voice,
-        rate=rate_value,  # Adjust rate (e.g., "-50%" for slower speech, "50%" for faster speech)
-        volume=volume_value,  # Adjust volume (e.g., "-50%" for quieter speech, "50%" for louder speech)
-        pitch=pitch_value,  # Adjust pitch (e.g., "-50Hz" for lower pitch, "50Hz" for higher pitch)
-    )
+  # Get the directory containing images
+  image_directory = result
 
-    # Specify the desired file path in the root directory
-    audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
+  # Read the captions.json file
+  captions_file = os.path.join(image_directory, "captions.json")
 
-    # Create the "audio" directory if it doesn't exist
-    os.makedirs(audio_dir, exist_ok=True)
+  with open(captions_file, "r") as f:
+    captions_data = json.load(f)
 
-    # Generate a random filename
-    random_filename = generate_random_filename()
+  # Extract the desired image path
+  desired_image_path = list(captions_data.keys())[1]
 
-    # Join the random filename with the audio directory path
-    file_path = os.path.join(audio_dir, random_filename)
+  # Generate a random name for the image
+  random_image_name = str(
+      uuid.uuid4()) + os.path.splitext(desired_image_path)[-1]
 
-    await communicate.save(file_path)
-    return file_path
+  # Define your destination folder
+  destination_folder = "images/"
 
-with open("data.json", "r") as f:
-    language_mappings = json.load(f)
+  # Move the image to the destination folder with the random name
+  shutil.move(desired_image_path,
+              os.path.join(destination_folder, random_image_name))
 
-@app.route("/languages", methods=["GET"])
-def get_languages():
-    return jsonify(language_mappings)
+  # Construct the JSON response with the image path
+  json_response = {
+      "message": "Image moved successfully",
+      "image_path": os.path.join(destination_folder, random_image_name)
+  }
 
-@app.route("/mbsa")
-def mbsa():
-    return render_template('index.html')
-
-@app.route('/get')
-def scrape_and_render():
-    # Fetch HTML content from the website
-    url = 'https://temp-number.com/temporary-numbers/United-States/12085813709/1'
-    response = requests.get(url)
-    html_content = response.text
-
-    # Render the HTML content in your Flask application
-    return render_template('index.html', html_content=html_content)
-
-@app.route("/country/<country>")
-def get_country_data(country):
-    try:
-        url = f"https://temp-number.com/countries/{country}/1"
-        response = requests.get(url)
-        html = response.text
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Now you can use BeautifulSoup to extract data from the HTML content
-        country_data = []
-        country_boxes = soup.select("div.country-box")
-        for box in country_boxes:
-            time = box.select_one(".add_time-top").get_text().strip()
-            phone_number = box.select_one(".card-title").get_text().strip()
-
-            country_data.append({"time": time, "phoneNumber": phone_number, "country": country})
-
-        return jsonify({"country": country, "countryData": country_data})
-
-    except Exception as e:
-        print("Error fetching data:", e)
-        return jsonify({"error": "Internal Server Error"}), 500
-
-@app.route("/tts", methods=["POST"])
-def predict():
-    try:
-        # Get data from the POST request
-        data = request.json
-
-        # Extract input text and parameters from the data
-        input_text = data.get("text", "")
-        language_code = data.get("language_code", "English-Jenny (Female)")
-        rate = int(data.get('rate', -10))
-        volume = int(data.get('volume', -10))
-        pitch = int(data.get('pitch', -10))
-
-        # Initialize Gradio client
-        client = Client("https://lelafav502-ttsstt.hf.space/")
-
-        # Make prediction
-        result = client.predict(
-            input_text,
-          language_code,
-            rate,
-            volume,
-            pitch,
-            api_name="/predict"
-        )
-
-        # Extract speech synthesis result and path
-        text = result[0]
-        path = result[1]
-
-        # Create dictionary to hold response data
-        response_data = {"text": text, "path": path}
-
-        return jsonify(response_data)
-
-    except Exception as e:
-        return jsonify({"error": str(e)})
+  return jsonify(json_response)
 
